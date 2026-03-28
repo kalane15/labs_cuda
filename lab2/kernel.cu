@@ -1,10 +1,7 @@
 ﻿#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-#include <stdio.h>
 #include <stdlib.h>
-#include <texture_indirect_functions.h>
-#include <iostream>
-
+#include <stdio.h>
 #define CSC(call)  									                \
 do {											                    \
 	cudaError_t res = call;							                \
@@ -16,17 +13,26 @@ do {											                    \
 } while(0)
 
 __global__ void kernel(cudaTextureObject_t tex, uchar4* out, int w, int h) {
-    int idx = blockDim.x * blockIdx.x + threadIdx.x;
-    int idy = blockDim.y * blockIdx.y + threadIdx.y;
-    int offsetx = blockDim.x * gridDim.x;
-    int offsety = blockDim.y * gridDim.y;
-    int x, y;
-    uchar4 p;
-    for (y = idy; y < h; y += offsety)
-        for (x = idx; x < w; x += offsetx) {
-            p = tex2D<uchar4>(tex, 0.1 * x / w, 0.1 * y / h);
-            out[y * w + x] = make_uchar4(255 - p.x, 255 - p.y, 255 - p.z, p.w);
-        }
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x >= w || y >= h) return;
+
+    uchar4 p00 = tex2D<uchar4>(tex, (float)x, (float)y);
+    uchar4 p01 = tex2D<uchar4>(tex, (float)x, (float)(y + 1));
+    uchar4 p10 = tex2D<uchar4>(tex, (float)(x + 1), (float)y);
+    uchar4 p11 = tex2D<uchar4>(tex, (float)(x + 1), (float)(y + 1));
+
+    float y00 = 0.299f * p00.x + 0.587f * p00.y + 0.114f * p00.z;
+    float y01 = 0.299f * p01.x + 0.587f * p01.y + 0.114f * p01.z;
+    float y10 = 0.299f * p10.x + 0.587f * p10.y + 0.114f * p10.z;
+    float y11 = 0.299f * p11.x + 0.587f * p11.y + 0.114f * p11.z;
+
+    float gx = y11 - y00;
+    float gy = y10 - y01;
+    float edge = sqrtf(gx * gx + gy * gy);
+
+    out[y * w + x] = make_uchar4(edge, edge, edge, 0.0);
 }
 
 int main() {
@@ -51,10 +57,9 @@ int main() {
     struct cudaTextureDesc texDesc;
     memset(&texDesc, 0, sizeof(texDesc));
     texDesc.addressMode[0] = cudaAddressModeWrap;
-    texDesc.addressMode[1] = cudaAddressModeMirror; // Clamp
+    texDesc.addressMode[1] = cudaAddressModeMirror;
     texDesc.filterMode = cudaFilterModePoint;
     texDesc.readMode = cudaReadModeElementType;
-    texDesc.normalizedCoords = true;
 
     cudaTextureObject_t tex = 0;
     CSC(cudaCreateTextureObject(&tex, &resDesc, &texDesc, NULL));
@@ -62,7 +67,7 @@ int main() {
     uchar4* dev_out;
     CSC(cudaMalloc(&dev_out, sizeof(uchar4) * w * h));
 
-    kernel <<< dim3(16, 16), dim3(32, 32) >>> (tex, dev_out, w, h);
+    kernel<<< dim3(16, 16), dim3(32, 32) >>> (tex, dev_out, w, h);
     CSC(cudaGetLastError());
 
     CSC(cudaMemcpy(data, dev_out, sizeof(uchar4) * w * h, cudaMemcpyDeviceToHost));
