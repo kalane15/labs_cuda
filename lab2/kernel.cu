@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <float.h>
+#include <iostream>
 
 #define CSC(call)  									                \
 do {											                    \
@@ -49,7 +50,9 @@ __global__ void kernel(cudaTextureObject_t tex, uchar4 * out, int w, int h) {
 
 int main() {
     int w, h;
-    FILE* fp = fopen("in.data", "rb");
+    std::string input_path, output_path;
+    std::cin >> input_path >> output_path;
+    FILE* fp = fopen(input_path.c_str(), "rb");
     fread(&w, sizeof(int), 1, fp);
     fread(&h, sizeof(int), 1, fp);
     uchar4* data = (uchar4*)malloc(sizeof(uchar4) * w * h);
@@ -93,7 +96,7 @@ int main() {
     CSC(cudaFreeArray(arr));
     CSC(cudaFree(dev_out));
 
-    fp = fopen("out.data", "wb");
+    fp = fopen(output_path.c_str(), "wb");
     fwrite(&w, sizeof(int), 1, fp);
     fwrite(&h, sizeof(int), 1, fp);
     fwrite(data, sizeof(uchar4), w * h, fp);
