@@ -23,49 +23,6 @@ do {											                    \
 	}										                        \
 } while(0)
 
-
-
-__global__ void mahalanobis_kernel(uchar4* d_pixels, int width, int height) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = width * height;
-    if (idx >= total) return;
-
-    uchar4 pixel = d_pixels[idx];
-
-    int best_class = 0;
-    double best_dist = DBL_MAX;
-    double p[3];
-    p[0] = pixel.x;
-    p[1] = pixel.y;
-    p[2] = pixel.z;
-    for (int c = 0; c < dev_num_classes; ++c) {
-        double diff[3] = {
-            p[0] - dev_means[c][0],
-            p[1] - dev_means[c][1],
-            p[2] - dev_means[c][2]
-        };
-
-        double temp[3];
-        for (int i = 0; i < 3; ++i) {
-            temp[i] = 0.0;
-            for (int j = 0; j < 3; ++j)
-                temp[i] += dev_inv_covs[c][i][j] * diff[j];
-        }
-
-        double dist = diff[0] * temp[0] + diff[1] * temp[1] + diff[2] * temp[2];
-
-        if (dist < best_dist - 1e-12) {
-            best_dist = dist;
-            best_class = c;
-        }
-    }
-
-    pixel.w = best_class;
-    d_pixels[idx] = pixel;
-}
-
-
-
 struct Mat3 {
     double m[3][3];
     Mat3() { for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) m[i][j] = 0.0; }
@@ -139,6 +96,50 @@ public:
     Mat3 cov_inv;          
 };
 
+__constant__ double dev_means[32][3];
+__constant__ double dev_inv_covs[32][3][3];
+__constant__ int dev_num_classes;
+
+__global__ void mahalanobis_kernel(uchar4* d_pixels, int width, int height) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = width * height;
+    if (idx >= total) return;
+
+    uchar4 pixel = d_pixels[idx];
+
+    int best_class = 0;
+    double best_dist = DBL_MAX;
+    double p[3];
+    p[0] = pixel.x;
+    p[1] = pixel.y;
+    p[2] = pixel.z;
+    for (int c = 0; c < dev_num_classes; ++c) {
+        double diff[3] = {
+            p[0] - dev_means[c][0],
+            p[1] - dev_means[c][1],
+            p[2] - dev_means[c][2]
+        };
+
+        double temp[3];
+        for (int i = 0; i < 3; ++i) {
+            temp[i] = 0.0;
+            for (int j = 0; j < 3; ++j)
+                temp[i] += dev_inv_covs[c][i][j] * diff[j];
+        }
+
+        double dist = diff[0] * temp[0] + diff[1] * temp[1] + diff[2] * temp[2];
+
+        if (dist < best_dist - 1e-12) {
+            best_dist = dist;
+            best_class = c;
+        }
+    }
+
+    pixel.w = best_class;
+    d_pixels[idx] = pixel;
+}
+
+
 void load_class(std::vector<ClassInfo>& classes, std::vector<uchar4>& data, int i, int w, int h) {
     long long train_count;
     std::cin >> train_count;
@@ -158,9 +159,7 @@ void load_class(std::vector<ClassInfo>& classes, std::vector<uchar4>& data, int 
     classes[i] = c;
 }
 
-__constant__ double dev_means[32][3];
-__constant__ double dev_inv_covs[32][3][3];
-__constant__ int dev_num_classes;
+
 
 int main()
 {
@@ -209,25 +208,25 @@ int main()
         }        
     }
 
-    cudaMemcpyToSymbol(dev_means, means, sizeof(double) * 32 * 3);
-    cudaMemcpyToSymbol(dev_inv_covs, inv_covs, sizeof(double) * 32 * 3 * 3);
-    cudaMemcpyToSymbol(&dev_num_classes, &num_classes, sizeof(int));
+    CSC(cudaMemcpyToSymbol(dev_means, means, sizeof(double) * 32 * 3));
+    CSC(cudaMemcpyToSymbol(dev_inv_covs, inv_covs, sizeof(double) * 32 * 3 * 3));
+    CSC(cudaMemcpyToSymbol(&dev_num_classes, &num_classes, sizeof(int)));
 
     int pixel_bytes = sizeof(uchar4) * data.size();
     uchar4* dev_pixels = nullptr;
 
-    cudaMalloc(&dev_pixels, pixel_bytes);
+    CSC(cudaMalloc(&dev_pixels, pixel_bytes));
 
-    cudaMemcpy(dev_pixels, data.data(), pixel_bytes, cudaMemcpyHostToDevice);
+    CSC(cudaMemcpy(dev_pixels, data.data(), pixel_bytes, cudaMemcpyHostToDevice));
 
     int threads_per_block = 256;
     int blocks = (w * h + threads_per_block - 1) / threads_per_block;
 
     mahalanobis_kernel << <blocks, threads_per_block >> > (dev_pixels, w, h);
-    cudaDeviceSynchronize();
+    CSC(cudaDeviceSynchronize());
 
     std::vector<uint32_t> h_pixels(w * h);
-    cudaMemcpy(h_pixels.data(), dev_pixels, pixel_bytes, cudaMemcpyDeviceToHost);
+    CSC(cudaMemcpy(h_pixels.data(), dev_pixels, pixel_bytes, cudaMemcpyDeviceToHost));
 
 
     for (size_t i = 0; i < w * h; ++i) {
@@ -238,14 +237,16 @@ int main()
         data[i].w = val & 0xFF;
     }
 
-    cudaFree(dev_pixels);
+    CSC(cudaFree(dev_pixels));
 
-    fp_out = fopen(output_path.c_str(), "wb");
-    fwrite(&w, sizeof(int), 1, fp_out);
-    fwrite(&h, sizeof(int), 1, fp_out);
-    fwrite(data.data(), sizeof(uchar4), w * h, fp_out);
-    fclose(fp_out);
-
+    std::ofstream fp_out(output_path, std::ios::binary);
+    if (!fp_out) {
+        return 1;
+    }
+    fp_out.write(reinterpret_cast<const char*>(&w), sizeof(int));
+    fp_out.write(reinterpret_cast<const char*>(&h), sizeof(int));
+    fp_out.write(reinterpret_cast<const char*>(data.data()), sizeof(uchar4) * w * h);
+    
     return 0;
 }
 
