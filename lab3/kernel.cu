@@ -197,20 +197,21 @@ int main()
     double inv_covs[32][3][3];
     int num_classes = class_count;
 
-    for (int i = 0; i < class_count; i++) {
-        means[i][0] = classes[i].mean[0];
-        means[i][1] = classes[i].mean[1];
-        means[i][2] = classes[i].mean[2];
+    for (int k = 0; k < class_count; k++) {
+        means[k][0] = classes[k].mean[0];
+        means[k][1] = classes[k].mean[1];
+        means[k][2] = classes[k].mean[2];
 
         for (int x = 0; x < 3; x++) {
-            for (int y = 0; x < 3; x++) {
-                inv_covs[i][x][y] = classes[i].cov_inv.m[x][y];
-        }        
+            for (int y = 0; y < 3; y++) {
+                inv_covs[k][x][y] = classes[k].cov_inv.m[x][y];
+            }
+        }
     }
 
     CSC(cudaMemcpyToSymbol(dev_means, means, sizeof(double) * 32 * 3));
     CSC(cudaMemcpyToSymbol(dev_inv_covs, inv_covs, sizeof(double) * 32 * 3 * 3));
-    CSC(cudaMemcpyToSymbol(&dev_num_classes, &num_classes, sizeof(int)));
+    CSC(cudaMemcpyToSymbol(dev_num_classes, &num_classes, sizeof(int)));
 
     int pixel_bytes = sizeof(uchar4) * data.size();
     uchar4* dev_pixels = nullptr;
@@ -222,22 +223,14 @@ int main()
     int threads_per_block = 256;
     int blocks = (w * h + threads_per_block - 1) / threads_per_block;
 
-    mahalanobis_kernel << <blocks, threads_per_block >> > (dev_pixels, w, h);
+    mahalanobis_kernel <<<blocks, threads_per_block >>> (dev_pixels, w, h);
     CSC(cudaDeviceSynchronize());
 
-    std::vector<uint32_t> h_pixels(w * h);
+    std::vector<uchar4> h_pixels(w * h);
     CSC(cudaMemcpy(h_pixels.data(), dev_pixels, pixel_bytes, cudaMemcpyDeviceToHost));
 
 
-    for (size_t i = 0; i < w * h; ++i) {
-        uint32_t val = h_pixels[i];
-        data[i].x = (val >> 24) & 0xFF;
-        data[i].y = (val >> 16) & 0xFF;
-        data[i].z = (val >> 8) & 0xFF;
-        data[i].w = val & 0xFF;
-    }
-
-    CSC(cudaFree(dev_pixels));
+     CSC(cudaFree(dev_pixels));
 
     std::ofstream fp_out(output_path, std::ios::binary);
     if (!fp_out) {
@@ -245,7 +238,7 @@ int main()
     }
     fp_out.write(reinterpret_cast<const char*>(&w), sizeof(int));
     fp_out.write(reinterpret_cast<const char*>(&h), sizeof(int));
-    fp_out.write(reinterpret_cast<const char*>(data.data()), sizeof(uchar4) * w * h);
+    fp_out.write(reinterpret_cast<const char*>(h_pixels.data()), sizeof(uchar4) * w * h);
     
     return 0;
 }
