@@ -1,15 +1,11 @@
 ﻿#include "cuda_runtime.h"
 #include "device_launch_parameters.h"
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <float.h>
 #include <iostream>
-#include <stdio.h>
 #include <vector>
 #include <fstream>
-#include <vector>
 #include <cstdint>
 #include <cmath>
 #define ll long long
